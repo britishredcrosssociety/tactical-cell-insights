@@ -16,11 +16,12 @@
 ## - vunerable MSOAs
 ##
 library(tidyverse)
-library(sf)
 library(tmap)
+library(sf)
 
 source("load lookup tables.r")
 source("https://github.com/matthewgthomas/brclib/raw/master/R/colours.R")  # for get_brc_colours()
+source("https://github.com/britishredcrosssociety/covid-19-vulnerability/raw/master/functions.r")  # for calc_risk_quantiles
 
 brc_cols = get_brc_colours()
 
@@ -50,7 +51,7 @@ lads = lads %>%
   mutate(name = case_when(
     str_sub(lad19cd, 1, 1) == "W" ~ "Wales",
     str_sub(lad19cd, 1, 1) == "S" ~ "Scotland",
-    str_sub(lad19cd, 1, 1) == "N" ~ "Northern Ireland",
+    str_sub(lad19cd, 1, 1) == "N" ~ "Northern Ireland and Isle of Man",
     TRUE ~ name
   ))
 
@@ -89,34 +90,42 @@ msoa_lad_tc = msoa_lad %>%
 ##
 ## vulnerability index
 ##
-vi = read_sf("output/vulnerability-MSOA-UK.geojson")
-vi_food = read_sf("bespoke vulnerability index - food/food-vulnerability-MSOA-England.geojson")
-# digital = read_csv("data/CACI/digital-exclusion-msoa.csv")
-asylum = read_csv("data/asylum-LA.csv")
+vi = read_sf("https://github.com/britishredcrosssociety/covid-19-vulnerability/raw/master/output/vulnerability-MSOA-UK.geojson")
 
+# load food
+vi_food_eng = read_sf("https://github.com/britishredcrosssociety/covid-19-vulnerability/raw/master/bespoke%20vulnerability%20index%20-%20food/food-vulnerability-MSOA-England.geojson")
+vi_food_wal = read_sf("https://github.com/britishredcrosssociety/covid-19-vulnerability/raw/master/bespoke%20vulnerability%20index%20-%20food/food-vulnerability-MSOA-Wales.geojson")
+vi_food_sco = read_sf("https://github.com/britishredcrosssociety/covid-19-vulnerability/raw/master/bespoke%20vulnerability%20index%20-%20food/food-vulnerability-MSOA-Scotland.geojson")
+vi_food_ni  = read_sf("https://github.com/britishredcrosssociety/covid-19-vulnerability/raw/master/bespoke%20vulnerability%20index%20-%20food/food-vulnerability-SOA-NI.geojson")
+
+vi_food = rbind(vi_food_eng %>% select(Code, Food.Vulnerability.decile),
+                vi_food_wal %>% select(Code, Food.Vulnerability.decile),
+                vi_food_sco %>% select(Code, Food.Vulnerability.decile),
+                vi_food_ni  %>% select(Code, Food.Vulnerability.decile))
+
+
+##
+## asylum data
+##
+asylum = read_csv("https://github.com/britishredcrosssociety/covid-19-vulnerability/raw/master/data/asylum-LA.csv")
+
+
+##
+## digital exclusion
+##
 # load digital exclusion
-caci_vuln_lsoa = read_csv("data/CACI/digital-exclusion-lsoa.csv")
-caci_vuln_msoa = read_csv("data/CACI/digital-exclusion-msoa.csv")
+caci_vuln_lsoa = read_csv("https://github.com/britishredcrosssociety/covid-19-vulnerability/raw/master/data/CACI/digital-exclusion-lsoa.csv")
+caci_vuln_msoa = read_csv("https://github.com/britishredcrosssociety/covid-19-vulnerability/raw/master/data/CACI/digital-exclusion-msoa.csv")
+
 # merge SOAs for Northern Ireland into the MSOA dataframe
 digital = caci_vuln_msoa %>% 
   filter(!startsWith(MSOA11CD, "N")) %>%  # no MSOAs in Northern Ireland
   
   bind_rows( caci_vuln_lsoa %>% filter(startsWith(LSOA11CD, "9")) %>% rename(MSOA11CD = LSOA11CD) ) %>% 
   
-  select(MSOA11CD, `Digital Vulnerability score`)
-
-rm(caci_vuln_lsoa, caci_vuln_msoa)
-
-vi = vi %>% left_join(msoa_lad_tc, by = c("Code" = "MSOA11CD"))
-vi_food = vi_food %>% left_join(msoa_lad_tc, by = c("Code" = "MSOA11CD"))
-digital = digital %>% left_join(msoa_lad_tc, by = "MSOA11CD")
-asylum = asylum %>% left_join(lad_tc, by = "LAD19CD")
-
-# manually point out if Northern Ireland cell
-vi = vi %>% mutate(TacticalCell = ifelse(str_sub(Code, 1, 1) == "9", "Northern Ireland", TacticalCell))
-vi_food = vi_food %>% mutate(TacticalCell = ifelse(str_sub(Code, 1, 1) == "9", "Northern Ireland", TacticalCell))
-digital = digital %>% mutate(TacticalCell = ifelse(str_sub(MSOA11CD, 1, 1) == "9", "Northern Ireland", TacticalCell))
-asylum = asylum %>% mutate(TacticalCell = ifelse(str_sub(LAD19CD, 1, 1) == "N", "Northern Ireland", TacticalCell))
+  select(MSOA11CD, `Digital Vulnerability score`) %>% 
+  
+  mutate(`Digital Vulnerability decile` = calc_risk_quantiles(`Digital Vulnerability score`, quants = 10))
 
 # add digital exclusion to boundaries
 # Middle Layer Super Output Areas (December 2011) Boundaries EW BSC
@@ -124,9 +133,36 @@ asylum = asylum %>% mutate(TacticalCell = ifelse(str_sub(LAD19CD, 1, 1) == "N", 
 msoa = read_sf("https://opendata.arcgis.com/datasets/c661a8377e2647b0bae68c4911df868b_3.geojson") %>%
   st_transform(crs = 27700)
 
-digital = msoa %>% 
-  left_join(digital, by = c("msoa11cd" = "MSOA11CD")) %>% 
-  select(Code = msoa11cd, everything(), -objectid, -msoa11nm, -msoa11nmw, -st_areashape, -st_lengthshape)
+# Intermediate zones
+iz = read_sf("data/boundaries/SG_IntermediateZone_Bdry_2011.shp") %>% 
+  st_transform(crs = 27700)
+
+# Super Output Areas
+# soa = read_sf("https://cc-p-ni.ckan.io/dataset/678697e1-ae71-41f3-abba-0ef5f3f352c2/resource/80392e82-8bee-42de-a1e3-82d1cbaa983f/download/soa2001.json") %>% 
+soa = read_sf("data/boundaries/SOA2011.shp") %>% 
+  st_transform(crs = 27700)
+
+# combine into a single spatial dataframe and merge in vulnerability index
+msoa_uk = rbind(msoa %>% select(Code = msoa11cd), 
+                iz %>% select(Code = InterZone),
+                soa %>% select(Code = SOA_CODE))
+
+digital = msoa_uk %>% 
+  left_join(digital, by = c("Code" = "MSOA11CD"))
+
+rm(caci_vuln_lsoa, caci_vuln_msoa)
+
+# lookup Tactical Cells
+vi = vi %>% left_join(msoa_lad_tc, by = c("Code" = "MSOA11CD"))
+vi_food = vi_food %>% left_join(msoa_lad_tc, by = c("Code" = "MSOA11CD"))
+digital = digital %>% left_join(msoa_lad_tc, by = c("Code" = "MSOA11CD"))
+asylum = asylum %>% left_join(lad_tc, by = "LAD19CD")
+
+# manually point out if Northern Ireland cell
+vi = vi %>% mutate(TacticalCell = ifelse(str_sub(Code, 1, 1) == "9", "Northern Ireland and Isle of Man", TacticalCell))
+vi_food = vi_food %>% mutate(TacticalCell = ifelse(str_sub(Code, 1, 1) == "9", "Northern Ireland and Isle of Man", TacticalCell))
+digital = digital %>% mutate(TacticalCell = ifelse(str_sub(Code, 1, 1) == "9", "Northern Ireland and Isle of Man", TacticalCell))
+asylum = asylum %>% mutate(TacticalCell = ifelse(str_sub(LAD19CD, 1, 1) == "N", "Northern Ireland and Isle of Man", TacticalCell))
 
 
 ##
@@ -139,10 +175,14 @@ hotcold = function(x) case_when(
   TRUE ~ ""
 )
 
-for (tc_curr in unique(tc$name)) {
-  # tc_curr = "South and the Channel Islands"
-  # tc_curr = "Northern Ireland"
-  
+
+tc_names = unique(vi$TacticalCell)
+
+# tc_names = tc_names[ !tc_names %in% c("London", "South East")]  # uncomment line if you need to drop any Cells from the loop
+# tc_curr = "London"  # manual set TC if debugging
+
+for (tc_curr in tc_names) {
+
   # get subsets of boundaries within current Cell
   lads_s = lads %>% filter(name == tc_curr)
   # tc_s = tc %>% filter(name == tc_curr)
@@ -175,13 +215,12 @@ for (tc_curr in unique(tc$name)) {
     filter(HotCold != "")
   
   asylum_s = lads_s %>% 
-    left_join(asylum, by = c("lad19cd" = "LAD19CD")) %>% 
-    mutate(HotCold = case_when(
-      Sec95_q == 1 ~ "Fewest/no asylum seekers",
-      Sec95_q == 5 ~ "Most asylum seekers",
-      TRUE ~ ""
-    )) %>% 
-    filter(HotCold != "")
+    left_join(asylum, by = c("lad19cd" = "LAD19CD")) 
+    # mutate(HotCold = case_when(
+    #   Sec95_q == 5 ~ "Most asylum seekers",
+    #   TRUE ~ ""
+    # )) %>% 
+    # filter(HotCold != "")
   
   # asylum %>% 
   #   filter(TacticalCell == tc_curr) %>% 
@@ -226,17 +265,17 @@ for (tc_curr in unique(tc$name)) {
   # asylum support
   map_asylum = basemap +
     tm_shape(asylum_s) +
-    tm_polygons(col = "HotCold", palette = c(brc_cols$teal_light, brc_cols$red), border.alpha = 0.5, title = "Asylum seekers receiving Government support")
+    tm_polygons(col = "People receiving Section 95 support", palette = "Reds", border.alpha = 0.5, title = "People seeking asylum")
   
   # save maps
-  if (!dir.exists(file.path("maps/tactical cells", tc_curr))) dir.create(file.path("maps/tactical cells", tc_curr))  # create folder for this Cell if needed
+  if (!dir.exists(file.path("output", tc_curr))) dir.create(file.path("output", tc_curr))  # create folder for this Cell if needed
   
-  tmap_save(map_digital,  file.path("maps/tactical cells", tc_curr, "digital.png"))
-  tmap_save(map_clinical, file.path("maps/tactical cells", tc_curr, "clinical.png"))
-  tmap_save(map_economic, file.path("maps/tactical cells", tc_curr, "economic.png"))
-  tmap_save(map_health,   file.path("maps/tactical cells", tc_curr, "health.png"))
-  tmap_save(map_food,     file.path("maps/tactical cells", tc_curr, "food.png"))
-  tmap_save(map_asylum,   file.path("maps/tactical cells", tc_curr, "asylum.png"))
+  tmap_save(map_digital,  file.path("output", tc_curr, "digital.png"))
+  tmap_save(map_clinical, file.path("output", tc_curr, "clinical.png"))
+  tmap_save(map_economic, file.path("output", tc_curr, "economic.png"))
+  tmap_save(map_health,   file.path("output", tc_curr, "health.png"))
+  tmap_save(map_food,     file.path("output", tc_curr, "food.png"))
+  tmap_save(map_asylum,   file.path("output", tc_curr, "asylum.png"))
   
   print(paste0("Finished ", tc_curr))
 
