@@ -4,9 +4,7 @@
 library(tidyverse)
 library(nomisr)
 
-source("analysis - tactical cells/create lookup table - neighbourhood to Tactical Cell.r")
-tc_curr = "South and the Channel Islands"
-
+source("create lookup table - neighbourhood to Tactical Cell.r")
 
 ##
 ## Census ethnicity data from table KS201EW: Ethnic Group
@@ -48,46 +46,60 @@ census_detailed = census_raw %>%
   filter(!Ethnicity %in% c("All usual residents", "White", "Asian/Asian British", "Black/African/Caribbean/Black British", "Mixed/multiple ethnic groups", "Other ethnic group"))
 
 ##
-## calculate UK-wide and Cell proportions
+## calculate UK-wide proportions
 ##
 census_uk = census_detailed %>% 
   group_by(Ethnicity) %>% 
   summarise(Prop = sum(Value) / sum(census_detailed$Value))
 
-# histogram of ethnicities within each the Cell
-census_cell = census_detailed %>% 
-  # get tactical cells
-  left_join(msoa_lad_tc, by = c("Code" = "MSOA11CD")) %>% 
-  filter(TacticalCell == tc_curr)
 
-census_cell %>% 
-  group_by(Ethnicity) %>% 
-  summarise(Prop = sum(Value) / sum(census_cell$Value)) %>% 
-  
-  ggplot(aes(x = Ethnicity, y = Prop)) + 
-  
-  geom_col(fill = "cornflowerblue") +
-  geom_point(data = census_uk, size = 1.5) +
-  
-  coord_flip() +
-  
-  scale_y_continuous(labels = scales::percent) +
-  
-  labs(x = NULL, y = "Percentage of people") +
-  
-  theme_light() +
-  theme(panel.border        = element_blank()
-        ,axis.text          = element_text(size = 8)
-        ,legend.text        = element_text(size = 8)
-        ,legend.title       = element_blank()
-        ,legend.position    = "bottom"
-        ,panel.grid.major.x = element_blank()
-        ,panel.grid.minor.x = element_blank()
-        ,plot.margin        = margin(0.5, 0, 0.2, 0, "cm")
-        ,panel.grid.major   = element_blank()
-        ,panel.grid.minor   = element_blank()
-        ,panel.background   = element_rect(fill = "transparent", colour = NA)
-        ,plot.background    = element_rect(fill = "transparent", colour = NA)
-  )
+##
+## calculate and plot ethnicity distributions for each Cell
+##
+tc_names = unique(lad_tc$TacticalCell)
+tc_names = tc_names[ !tc_names %in% c("Scotland", "Northern Ireland and Isle of Man")]  # only England and Wales census in this script
 
-ggsave(file.path("maps/tactical cells", tc_curr, "ethnicity.png"), bg = "transparent", width = 200, height = 85, units = "mm")
+# tc_curr = "North"
+for (tc_curr in tc_names) {
+  
+  # histogram of ethnicities within each the Cell
+  census_cell = census_detailed %>% 
+    # get tactical cells
+    left_join(msoa_lad_tc, by = c("Code" = "MSOA11CD")) %>% 
+    filter(TacticalCell == tc_curr)
+  
+  plt_census = census_cell %>% 
+    group_by(Ethnicity) %>% 
+    summarise(Prop = sum(Value) / sum(census_cell$Value)) %>% 
+    
+    ggplot(aes(x = Ethnicity, y = Prop)) + 
+    
+    geom_col(fill = "cornflowerblue") +
+    geom_point(data = census_uk, size = 1.5) +
+    
+    coord_flip() +
+    
+    scale_y_continuous(labels = scales::percent) +
+    
+    labs(x = NULL, y = "Percentage of people") +
+    
+    theme_light() +
+    theme(panel.border        = element_blank()
+          ,axis.text          = element_text(size = 8)
+          ,legend.text        = element_text(size = 8)
+          ,legend.title       = element_blank()
+          ,legend.position    = "bottom"
+          ,panel.grid.major.x = element_blank()
+          ,panel.grid.minor.x = element_blank()
+          ,plot.margin        = margin(0.5, 0, 0.2, 0, "cm")
+          ,panel.grid.major   = element_blank()
+          ,panel.grid.minor   = element_blank()
+          ,panel.background   = element_rect(fill = "transparent", colour = NA)
+          ,plot.background    = element_rect(fill = "transparent", colour = NA)
+    )
+  
+  ggsave(file.path("output", tc_curr, "ethnicity.png"), plot = plt_census, bg = "transparent", width = 200, height = 85, units = "mm")
+
+  print(paste0("Finished ", tc_curr))
+  
+}
