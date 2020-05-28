@@ -16,6 +16,7 @@
 ## - vunerable MSOAs
 ##
 library(tidyverse)
+library(lubridate)
 library(tmap)
 library(sf)
 
@@ -166,6 +167,26 @@ asylum = asylum %>% mutate(TacticalCell = ifelse(str_sub(LAD19CD, 1, 1) == "N", 
 
 
 ##
+## load data on shielded people by Local Authority
+##
+# Coronavirus Shielded Patient List, England - Local Authority: https://digital.nhs.uk/data-and-information/publications/statistical/mi-english-coronavirus-covid-19-shielded-patient-list-summary-totals/latest
+shielded = read_csv("https://files.digital.nhs.uk/96/69FFAA/Coronavirus%20%28COVID-19%29%20Shielded%20Patient%20List%2C%20England%20-%20Open%20Data%20-%20LA%20-%202020-05-15.csv")
+
+shielded = shielded %>% 
+  # keep only latest values (if more than one extraction happens to be in this file)
+  mutate(`Extract Date` = dmy(`Extract Date`)) %>% 
+  filter(`Extract Date` == max(`Extract Date`)) %>% 
+  
+  filter(`LA Code` != "ENG") %>%  # don't need England-wide figures
+
+  # lookup tactical cells
+  rename(Code = `LA Code`) %>% 
+  left_join(lad_tc, by = c("Code" = "LAD19CD"))
+
+shielded_vars = unique(shielded$`Breakdown Field`)
+
+
+##
 ## loop over Tactical Cells, creating maps for each
 ##
 # helper function to mark 20% most vulnerable and 20% least vulnerable
@@ -216,16 +237,7 @@ for (tc_curr in tc_names) {
   
   asylum_s = lads_s %>% 
     left_join(asylum, by = c("lad19cd" = "LAD19CD")) 
-    # mutate(HotCold = case_when(
-    #   Sec95_q == 5 ~ "Most asylum seekers",
-    #   TRUE ~ ""
-    # )) %>% 
-    # filter(HotCold != "")
-  
-  # asylum %>% 
-  #   filter(TacticalCell == tc_curr) %>% 
-  #   summarise(n = sum(`People receiving Section 95 support`))
-  
+
   
   ##
   ## make hot/cold spot maps
@@ -233,9 +245,6 @@ for (tc_curr in tc_names) {
   # basemap showing tactical cell and local authorities
   basemap = tm_shape(lads_s) +
     tm_polygons(col = "white", border.alpha = 0.5)
-  
-   # tm_shape(tc_s) +
-   # tm_polygons(col = "white", border.alpha = 0.8) 
   
   # digital exclusion
   map_digital = basemap +
@@ -277,6 +286,43 @@ for (tc_curr in tc_names) {
   tmap_save(map_food,     file.path("output", tc_curr, "food.png"))
   tmap_save(map_asylum,   file.path("output", tc_curr, "asylum.png"))
   
+  ##
+  ## maps for shielded people in England
+  ##
+  if (!tc_curr %in% c("Scotland", "Wales", "Northern Ireland and Isle of Man")) {
+    
+    # loop over every breakdown in data (by ages and by genders)
+    for (field in shielded_vars) {
+      print(field)
+      
+      shielded_s = lads_s %>% 
+        left_join(shielded, by = c("lad19cd" = "Code")) %>% 
+        filter(TacticalCell == tc_curr & `Breakdown Field` == field)
+      
+      for (field_value in unique(shielded_s$`Breakdown Value`)) {
+        print(field_value)
+
+        shielded_s2 = shielded_s %>% 
+          filter(`Breakdown Value` == field_value)
+        
+        shielded_title = case_when(
+          field == "Age" ~ paste0("Ages ", field_value),
+          field == "Gender" ~ paste0(field_value, "s"),
+          field == "ALL" ~ "All shielded people",
+          TRUE ~ field_value
+        )
+        
+        map_shielded = basemap + 
+          tm_shape(shielded_s2) +
+          tm_polygons(col = "Patient Count", palette = "Reds", border.alpha = 0.5, title = "No. people") +
+          tm_layout(title = shielded_title)
+        
+        tmap_save(map_shielded, file.path("output", tc_curr, paste0("shielded - ", shielded_title, ".png")))
+        
+      } # end for loop for field_value
+    }   # end for loop for field
+  }     # end if for England's Tactical Cells
+  
   print(paste0("Finished ", tc_curr))
 
-}  # end for loop
+}  # end main for loop
